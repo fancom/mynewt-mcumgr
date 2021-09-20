@@ -24,7 +24,6 @@
 
 #include <mgmt/mgmt.h>
 #include <cborattr/cborattr.h>
-#include <tinycbor/cbor.h>
 
 #include "omp/omp.h"
 #include "omp/omp_priv.h"

@@ -19,9 +19,12 @@
 
 #include <string.h>
 
-#include "tinycbor/cbor.h"
+#include "cbor.h"
 #include "mgmt/endian.h"
 #include "mgmt/mgmt.h"
+
+#include <logging/log.h>
+LOG_MODULE_REGISTER(mgmt);
 
 static mgmt_on_evt_cb *evt_cb;
 static struct mgmt_group *mgmt_group_list;
@@ -49,20 +52,20 @@ int
 mgmt_streamer_write_at(struct mgmt_streamer *streamer, size_t offset,
                        const void *data, int len)
 {
-    return streamer->cfg->write_at(streamer->writer, offset, data, len,
+    return streamer->cfg->write_at(&streamer->writer, offset, data, len,
                                    streamer->cb_arg);
 }
 
 int
 mgmt_streamer_init_reader(struct mgmt_streamer *streamer, void *buf)
 {
-    return streamer->cfg->init_reader(streamer->reader, buf, streamer->cb_arg);
+    return streamer->cfg->init_reader(&streamer->reader, buf, streamer->cb_arg);
 }
 
 int
 mgmt_streamer_init_writer(struct mgmt_streamer *streamer, void *buf)
 {
-    return streamer->cfg->init_writer(streamer->writer, buf, streamer->cb_arg);
+    return streamer->cfg->init_writer(&streamer->writer, buf, streamer->cb_arg);
 }
 
 void
@@ -138,6 +141,7 @@ mgmt_register_group(struct mgmt_group *group)
         mgmt_group_list_end->mg_next = group;
     }
     mgmt_group_list_end = group;
+    LOG_ERR("mgmt_register_group: registered groupId %d", group->mg_group_id);
 }
 
 const struct mgmt_handler *
@@ -182,16 +186,16 @@ mgmt_err_from_cbor(int cbor_status)
 }
 
 int
-mgmt_ctxt_init(struct mgmt_ctxt *ctxt, struct mgmt_streamer *streamer)
+mgmt_ctxt_init(struct mgmt_ctxt *ctxt, struct buffer_ctxt *encoder_buffer_ctxt, struct buffer_ctxt *decoder_buffer_ctxt)
 {
-    int rc;
+    CborError rc;
 
-    rc = cbor_parser_init(streamer->reader, 0, &ctxt->parser, &ctxt->it);
+    rc = cbor_parser_init(decoder_buffer_ctxt->buffer, decoder_buffer_ctxt->size, 0, &ctxt->parser, &ctxt->it);
     if (rc != CborNoError) {
         return mgmt_err_from_cbor(rc);
     }
 
-    cbor_encoder_init(&ctxt->encoder, streamer->writer, 0);
+    cbor_encoder_init(&ctxt->encoder, encoder_buffer_ctxt->buffer, encoder_buffer_ctxt->size, 0);
 
     return 0;
 }

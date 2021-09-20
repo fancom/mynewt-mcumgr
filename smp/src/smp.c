@@ -22,10 +22,15 @@
 #include <assert.h>
 #include <string.h>
 
-#include "tinycbor/cbor.h"
+#include "cbor.h"
 #include "mgmt/endian.h"
 #include "mgmt/mgmt.h"
 #include "smp/smp.h"
+
+#include "net/buf.h"
+
+#include <logging/log.h>
+LOG_MODULE_REGISTER(smp_mcumgr);
 
 static int
 smp_align4(int x)
@@ -69,15 +74,11 @@ smp_init_rsp_hdr(const struct mgmt_hdr *req_hdr, struct mgmt_hdr *rsp_hdr)
 static int
 smp_read_hdr(struct smp_streamer *streamer, struct mgmt_hdr *dst_hdr)
 {
-    struct cbor_decoder_reader *reader;
-
-    reader = streamer->mgmt_stmr.reader;
-
-    if (reader->message_size < sizeof *dst_hdr) {
+    if (streamer->mgmt_stmr.reader.nb->size < sizeof *dst_hdr) {
         return MGMT_ERR_EINVAL;
     }
 
-    reader->cpy(reader, (char *)dst_hdr, 0, sizeof *dst_hdr);
+    memcpy((char *)dst_hdr, streamer->mgmt_stmr.reader.nb->data, sizeof *dst_hdr);
     return 0;
 }
 
@@ -96,12 +97,25 @@ smp_build_err_rsp(struct smp_streamer *streamer,
                   const struct mgmt_hdr *req_hdr,
                   int status)
 {
-    struct CborEncoder map;
     struct mgmt_ctxt cbuf;
     struct mgmt_hdr rsp_hdr;
+    struct buffer_ctxt encBuf;
+    struct buffer_ctxt decBuf;
     int rc;
 
-    rc = mgmt_ctxt_init(&cbuf, &streamer->mgmt_stmr);
+    /* encoding should happen on the payload_encoder and not on the cbuf.encoder
+     * so create a copy of cbuf and replace the encoder pointer
+     * Nasty but effective hack */
+    struct mgmt_ctxt payload_ctxt;
+
+    /* give the netbuffer memory region to the cbor encoder but with an offset where the header is placed */
+    encBuf.buffer = streamer->mgmt_stmr.writer.nb->data + MGMT_HDR_SIZE;
+    encBuf.size = streamer->mgmt_stmr.writer.nb->size - MGMT_HDR_SIZE;
+
+    decBuf.buffer = streamer->mgmt_stmr.reader.nb->data;
+    decBuf.size = streamer->mgmt_stmr.reader.nb->len;/* use the actual nr of encoded bytes in the buffer, not the max size */
+
+    rc = mgmt_ctxt_init(&cbuf, &encBuf, &decBuf);
     if (rc != 0) {
         return rc;
     }
@@ -112,22 +126,29 @@ smp_build_err_rsp(struct smp_streamer *streamer,
         return rc;
     }
 
-    rc = cbor_encoder_create_map(&cbuf.encoder, &map, CborIndefiniteLength);
+    /* deliberate shallow copies */
+    payload_ctxt.parser = cbuf.parser;
+    payload_ctxt.it = cbuf.it;
+
+    rc = cbor_encoder_create_map(&cbuf.encoder, &payload_ctxt.encoder, CborIndefiniteLength);
     if (rc != 0) {
         return rc;
     }
 
-    rc = mgmt_write_rsp_status(&cbuf, status);
+    rc = mgmt_write_rsp_status(&payload_ctxt, status);
     if (rc != 0) {
         return rc;
     }
 
-    rc = cbor_encoder_close_container(&cbuf.encoder, &map);
+    rc = cbor_encoder_close_container(&cbuf.encoder, &payload_ctxt.encoder);
     if (rc != 0) {
         return rc;
     }
 
-    rsp_hdr.nh_len = cbor_encode_bytes_written(&cbuf.encoder) - MGMT_HDR_SIZE;
+    /* Fix up the response header with the correct length. */
+    rsp_hdr.nh_len = cbor_encoder_get_buffer_size(&cbuf.encoder, encBuf.buffer);
+    /* update the netbuffer length, used in outputting the packet */
+    streamer->mgmt_stmr.writer.nb->len += rsp_hdr.nh_len;
     mgmt_hton_hdr(&rsp_hdr);
     rc = smp_write_hdr(streamer, &rsp_hdr);
     if (rc != 0) {
@@ -157,20 +178,31 @@ smp_handle_single_payload(struct mgmt_ctxt *cbuf,
 {
     const struct mgmt_handler *handler;
     mgmt_handler_fn *handler_fn;
-    struct CborEncoder payload_encoder;
+
+    /* encoding should happen on the payload_encoder and not on the cbuf.encoder
+     * so create a copy of cbuf and replace the encoder pointer
+     * Nasty but effective hack */
+    struct mgmt_ctxt payload_ctxt;
+    /* deliberate shallow copies */
+    payload_ctxt.parser = cbuf->parser;
+    payload_ctxt.it = cbuf->it;
     int rc;
 
     handler = mgmt_find_handler(req_hdr->nh_group, req_hdr->nh_id);
+    LOG_ERR("smp_handle_single_payload: mgmt_find_handler returned ptr %X", handler);
     if (handler == NULL) {
+        LOG_ERR("smp_handle_single_payload: failed to find handler for groupId %d and commandId %d", req_hdr->nh_group, req_hdr->nh_id);
         return MGMT_ERR_ENOTSUP;
     }
 
     /* Begin response payload.  Response fields are inserted into the root
      * map as key value pairs.
      */
-    rc = cbor_encoder_create_map(&cbuf->encoder, &payload_encoder,
+    rc = cbor_encoder_create_map(&cbuf->encoder, &payload_ctxt.encoder,
                                  CborIndefiniteLength);
+    LOG_ERR("smp_handle_single_payload: cbor_encoder_create_map %d", rc);
     rc = mgmt_err_from_cbor(rc);
+    LOG_ERR("smp_handle_single_payload: mgmt_err_from_cbor %d", rc);
     if (rc != 0) {
         return rc;
     }
@@ -192,8 +224,11 @@ smp_handle_single_payload(struct mgmt_ctxt *cbuf,
         *handler_found = true;
         mgmt_evt(MGMT_EVT_OP_CMD_RECV, req_hdr->nh_group, req_hdr->nh_id, NULL);
 
-        rc = handler_fn(cbuf);
+        rc = handler_fn(&payload_ctxt);
+        LOG_ERR("smp_handle_single_payload: handler_fn %d", rc);
+        LOG_ERR("smp_handle_single_payload: after calling handler data ptr is at %X", cbuf->encoder.data.ptr);
     } else {
+        LOG_ERR("smp_handle_single_payload: handler_found unset %d", req_hdr->nh_op);
         rc = MGMT_ERR_ENOTSUP;
     }
 
@@ -202,7 +237,9 @@ smp_handle_single_payload(struct mgmt_ctxt *cbuf,
     }
 
     /* End response payload. */
-    rc = cbor_encoder_close_container(&cbuf->encoder, &payload_encoder);
+    rc = cbor_encoder_close_container(&cbuf->encoder, &payload_ctxt.encoder);
+    LOG_ERR("smp_handle_single_payload: cbor_encoder_close_container %d", rc);
+    LOG_ERR("smp_handle_single_payload: after closing container data ptr is at %X", cbuf->encoder.data.ptr);
     return mgmt_err_from_cbor(rc);
 }
 
@@ -225,9 +262,19 @@ smp_handle_single_req(struct smp_streamer *streamer,
 {
     struct mgmt_ctxt cbuf;
     struct mgmt_hdr rsp_hdr;
+    struct buffer_ctxt encBuf;
+    struct buffer_ctxt decBuf;
     int rc;
 
-    rc = mgmt_ctxt_init(&cbuf, &streamer->mgmt_stmr);
+    /* give the netbuffer memory region to the cbor encoder but with an offset where the header is placed */
+    encBuf.buffer = streamer->mgmt_stmr.writer.nb->data + MGMT_HDR_SIZE;
+    encBuf.size = streamer->mgmt_stmr.writer.nb->size - MGMT_HDR_SIZE;
+
+    decBuf.buffer = streamer->mgmt_stmr.reader.nb->data;
+    decBuf.size = streamer->mgmt_stmr.reader.nb->len;/* use the actual nr of encoded bytes in the buffer, not the max size */
+
+    rc = mgmt_ctxt_init(&cbuf, &encBuf, &decBuf);
+    LOG_ERR("smp_handle_single_req: mgmt_ctxt_init %d", rc);
     if (rc != 0) {
         return rc;
     }
@@ -236,21 +283,32 @@ smp_handle_single_req(struct smp_streamer *streamer,
      * fields will need to be fixed up later.
      */
     smp_init_rsp_hdr(req_hdr, &rsp_hdr);
+    LOG_ERR("smp_handle_single_req: writing dummy response header of size %d to %X", sizeof(rsp_hdr), streamer->mgmt_stmr.writer.encoder.data.ptr);
     rc = smp_write_hdr(streamer, &rsp_hdr);
+    LOG_ERR("smp_handle_single_req: smp_write_hdr %d", rc);
     if (rc != 0) {
         return rc;
     }
 
     /* Process the request and write the response payload. */
+    LOG_ERR("smp_handle_single_req: writing response data to %X", cbuf.encoder.data.ptr);
     rc = smp_handle_single_payload(&cbuf, req_hdr, handler_found);
+    LOG_ERR("smp_handle_single_req: smp_handle_single_payload %d", rc);
     if (rc != 0) {
         return rc;
     }
 
+    LOG_ERR("smp_handle_single_req: after writing response data ptr is at %X, start address %X", cbuf.encoder.data.ptr, encBuf.buffer);
+    LOG_ERR("smp_handle_single_req: nr encoded response bytes %d", cbor_encoder_get_buffer_size(&cbuf.encoder, encBuf.buffer));
+
     /* Fix up the response header with the correct length. */
-    rsp_hdr.nh_len = cbor_encode_bytes_written(&cbuf.encoder) - MGMT_HDR_SIZE;
+    rsp_hdr.nh_len = cbor_encoder_get_buffer_size(&cbuf.encoder, encBuf.buffer);
+    /* update the netbuffer length, used in outputting the packet */
+    streamer->mgmt_stmr.writer.nb->len += rsp_hdr.nh_len;
     mgmt_hton_hdr(&rsp_hdr);
+    LOG_ERR("smp_handle_single_req: writing actual response header of size %d to %X", sizeof(rsp_hdr), streamer->mgmt_stmr.writer.encoder.data.ptr);
     rc = smp_write_hdr(streamer, &rsp_hdr);
+    LOG_ERR("smp_handle_single_req: smp_write_hdr %d", rc);
     if (rc != 0) {
         return rc;
     }
@@ -326,10 +384,16 @@ smp_process_request_packet(struct smp_streamer *streamer, void *req)
     rsp = NULL;
     valid_hdr = true;
 
+    int loop_cnt = 0;
+
     while (1) {
+        loop_cnt++;
+        LOG_ERR("smp_process_request_packet: entered loop cnt %d", loop_cnt);
+
         handler_found = false;
 
         rc = mgmt_streamer_init_reader(&streamer->mgmt_stmr, req);
+        LOG_ERR("smp_process_request_packet: mgmt_streamer_init_reader %d", rc);
         if (rc != 0) {
             valid_hdr = false;
             break;
@@ -337,32 +401,43 @@ smp_process_request_packet(struct smp_streamer *streamer, void *req)
 
         /* Read the management header and strip it from the request. */
         rc = smp_read_hdr(streamer, &req_hdr);
+        LOG_ERR("smp_process_request_packet: smp_read_hdr %d from address %X", rc, streamer->mgmt_stmr.reader.nb->data);
         if (rc != 0) {
             valid_hdr = false;
             break;
         }
         mgmt_ntoh_hdr(&req_hdr);
+
+        LOG_ERR("smp_process_request_packet: decoded header into groupId %d and commandId %d", req_hdr.nh_group, req_hdr.nh_id);
+        LOG_ERR("smp_process_request_packet: CBorValue iterator ptr at address %X", streamer->mgmt_stmr.reader.it.ptr);
+        
         mgmt_streamer_trim_front(&streamer->mgmt_stmr, req, MGMT_HDR_SIZE);
 
         rsp = mgmt_streamer_alloc_rsp(&streamer->mgmt_stmr, req);
+        LOG_ERR("smp_process_request_packet: mgmt_streamer_alloc_rsp ptr %X", rsp);
         if (rsp == NULL) {
             rc = MGMT_ERR_ENOMEM;
             break;
         }
 
         rc = mgmt_streamer_init_writer(&streamer->mgmt_stmr, rsp);
+        LOG_ERR("smp_process_request_packet: mgmt_streamer_init_writer %d", rc);
         if (rc != 0) {
             break;
         }
 
+        LOG_ERR("smp_process_request_packet: set writer ptr to %X", streamer->mgmt_stmr.writer.encoder.data.ptr);
+
         /* Process the request payload and build the response. */
         rc = smp_handle_single_req(streamer, &req_hdr, &handler_found);
+        LOG_ERR("smp_process_request_packet: smp_handle_single_req %d", rc);
         if (rc != 0) {
             break;
         }
 
         /* Send the response. */
         rc = streamer->tx_rsp_cb(streamer, rsp, streamer->mgmt_stmr.cb_arg);
+        LOG_ERR("smp_process_request_packet: tx_rsp_cb %d", rc);
         rsp = NULL;
         if (rc != 0) {
             break;

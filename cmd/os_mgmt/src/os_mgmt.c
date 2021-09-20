@@ -20,12 +20,15 @@
 #include <assert.h>
 #include <string.h>
 
-#include "tinycbor/cbor.h"
+#include "cbor.h"
 #include "cborattr/cborattr.h"
 #include "mgmt/mgmt.h"
 #include "os_mgmt/os_mgmt.h"
 #include "os_mgmt/os_mgmt_impl.h"
 #include "os_mgmt/os_mgmt_config.h"
+
+#include <logging/log.h>
+LOG_MODULE_REGISTER(os_mgmt);
 
 #if OS_MGMT_ECHO
 static mgmt_handler_fn os_mgmt_echo;
@@ -88,12 +91,20 @@ os_mgmt_echo(struct mgmt_ctxt *ctxt)
     echo_buf[0] = '\0';
 
     err = cbor_read_object(&ctxt->it, attrs);
+    LOG_ERR("os_mgmt_echo: cbor_read_object %d", err);
     if (err != 0) {
         return MGMT_ERR_EINVAL;
     }
 
+    LOG_ERR("os_mgmt_echo: decoded echo string %s", echo_buf);
+
+    LOG_ERR("os_mgmt_echo: encoding echo response into address %X", ctxt->encoder.data.ptr);
+
+    /* encode a mapped key-value pair 'r=...' */
     err |= cbor_encode_text_stringz(&ctxt->encoder, "r");
+    LOG_ERR("os_mgmt_echo: after encoding 'r' address is at %X", ctxt->encoder.data.ptr);
     err |= cbor_encode_text_string(&ctxt->encoder, echo_buf, strlen(echo_buf));
+    LOG_ERR("os_mgmt_echo: after encoding 'echo_buf' address is at %X", ctxt->encoder.data.ptr);
 
     if (err != 0) {
         return MGMT_ERR_ENOMEM;
