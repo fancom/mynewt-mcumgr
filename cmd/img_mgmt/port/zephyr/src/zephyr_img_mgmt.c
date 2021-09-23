@@ -36,29 +36,6 @@ LOG_MODULE_REGISTER(LOG_MODULE_NAME);
 #include <img_mgmt/image.h>
 #include "../../../src/img_mgmt_priv.h"
 
-BUILD_ASSERT(CONFIG_IMG_MGMT_UPDATABLE_IMAGE_NUMBER == 1 ||
-             (CONFIG_IMG_MGMT_UPDATABLE_IMAGE_NUMBER == 2 &&
-              FLASH_AREA_LABEL_EXISTS(image_2) &&
-              FLASH_AREA_LABEL_EXISTS(image_3)),
-              "Missing partitions?");
-
-static int
-zephyr_img_mgmt_slot_to_image(int slot)
-{
-    switch (slot) {
-    case 0:
-    case 1:
-        return 0;
-#if FLASH_AREA_LABEL_EXISTS(image_2) && FLASH_AREA_LABEL_EXISTS(image_3)
-    case 2:
-    case 3:
-        return 1;
-#endif
-    default:
-        assert(0);
-    }
-    return 0;
-}
 /**
  * Determines if the specified area of flash is completely unwritten.
  */
@@ -153,7 +130,6 @@ zephyr_img_mgmt_flash_area_id(int slot)
     return fa_id;
 }
 
-#if CONFIG_IMG_MGMT_UPDATABLE_IMAGE_NUMBER == 1
 /**
  * In normal operation this function will select between first two slot
  * (in reality it just checks whether second slot can be used), ignoring the
@@ -199,27 +175,6 @@ img_mgmt_get_unused_slot_area_id(int slot)
     return slot != -1  ? zephyr_img_mgmt_flash_area_id(slot) : -1;
 #endif
 }
-#elif CONFIG_IMG_MGMT_UPDATABLE_IMAGE_NUMBER == 2
-static int
-img_mgmt_get_unused_slot_area_id(int image)
-{
-    int area_id = -1;
-
-    if (image == 0) {
-        if (img_mgmt_slot_in_use(1) == 0) {
-            area_id = zephyr_img_mgmt_flash_area_id(1);
-        }
-    } else if (image == 1) {
-        area_id = zephyr_img_mgmt_flash_area_id(3);
-    } else {
-        assert(0);
-    }
-
-    return area_id;
-}
-#else
-#error "Unsupported number of images"
-#endif
 
 /**
  * Compares two image version numbers in a semver-compatible way.
@@ -288,13 +243,11 @@ img_mgmt_impl_write_pending(int slot, bool permanent)
 {
     int rc;
 
-    if (slot != 1 &&
-        !(CONFIG_IMG_MGMT_UPDATABLE_IMAGE_NUMBER == 2 && slot == 3)) {
+    if (slot != 1) {
         return MGMT_ERR_EINVAL;
     }
 
-    rc = boot_request_upgrade_multi(zephyr_img_mgmt_slot_to_image(slot),
-                                    permanent);
+    rc = boot_request_upgrade(permanent);
     if (rc != 0) {
         return MGMT_ERR_EUNKNOWN;
     }
@@ -473,9 +426,7 @@ int img_mgmt_impl_erase_if_needed(uint32_t off, uint32_t len)
 int
 img_mgmt_impl_swap_type(int slot)
 {
-    int image = zephyr_img_mgmt_slot_to_image(slot);
-
-    switch (mcuboot_swap_type_multi(image)) {
+    switch (mcuboot_swap_type()) {
     case BOOT_SWAP_TYPE_NONE:
         return IMG_MGMT_SWAP_TYPE_NONE;
     case BOOT_SWAP_TYPE_TEST:
