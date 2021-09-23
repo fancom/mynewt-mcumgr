@@ -96,7 +96,7 @@ os_mgmt_echo(struct mgmt_ctxt *ctxt)
         return MGMT_ERR_EINVAL;
     }
 
-    LOG_ERR("os_mgmt_echo: decoded echo string %s", echo_buf);
+    LOG_ERR("os_mgmt_echo: decoded echo string %s", log_strdup(echo_buf));
 
     LOG_ERR("os_mgmt_echo: encoding echo response into address %X", ctxt->encoder.data.ptr);
 
