@@ -36,9 +36,6 @@
 #define CBORATTR_MAX_SIZE MYNEWT_VAL(CBORATTR_MAX_SIZE)
 #endif
 
-#include <logging/log.h>
-LOG_MODULE_REGISTER(cborattr);
-
 /* this maps a CborType to a matching CborAtter Type. The mapping is not
  * one-to-one because of signedness of integers
  * and therefore we need a function to do this trickery */
@@ -394,8 +391,6 @@ int
 cbor_read_object(struct CborValue *value, const struct cbor_attr_t *attrs)
 {
     int st;
-
-    LOG_ERR("cbor_read_object at %X", value->ptr);
 
     st = cbor_internal_read_object(value, attrs, NULL, 0);
     return st;
