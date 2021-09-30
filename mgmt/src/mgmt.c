@@ -23,9 +23,6 @@
 #include "mgmt/endian.h"
 #include "mgmt/mgmt.h"
 
-#include <logging/log.h>
-LOG_MODULE_REGISTER(mgmt);
-
 static mgmt_on_evt_cb *evt_cb;
 static struct mgmt_group *mgmt_group_list;
 static struct mgmt_group *mgmt_group_list_end;
@@ -141,7 +138,6 @@ mgmt_register_group(struct mgmt_group *group)
         mgmt_group_list_end->mg_next = group;
     }
     mgmt_group_list_end = group;
-    LOG_ERR("mgmt_register_group: registered groupId %d", group->mg_group_id);
 }
 
 const struct mgmt_handler *
