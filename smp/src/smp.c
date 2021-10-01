@@ -96,8 +96,8 @@ smp_build_err_rsp(struct smp_streamer *streamer,
 {
     struct mgmt_ctxt cbuf;
     struct mgmt_hdr rsp_hdr;
-    struct buffer_ctxt encBuf;
-    struct buffer_ctxt decBuf;
+    struct mgmt_buffer encBuf;
+    struct mgmt_buffer decBuf;
     int rc;
 
     /* encoding should happen on the payload_encoder and not on the cbuf.encoder
@@ -250,8 +250,8 @@ smp_handle_single_req(struct smp_streamer *streamer,
 {
     struct mgmt_ctxt cbuf;
     struct mgmt_hdr rsp_hdr;
-    struct buffer_ctxt encBuf;
-    struct buffer_ctxt decBuf;
+    struct mgmt_buffer encBuf;
+    struct mgmt_buffer decBuf;
     int rc;
 
     /* give the netbuffer memory region to the cbor encoder but with an offset where the header is placed */

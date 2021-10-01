@@ -182,16 +182,16 @@ mgmt_err_from_cbor(int cbor_status)
 }
 
 int
-mgmt_ctxt_init(struct mgmt_ctxt *ctxt, struct buffer_ctxt *encoder_buffer_ctxt, struct buffer_ctxt *decoder_buffer_ctxt)
+mgmt_ctxt_init(struct mgmt_ctxt *ctxt, struct mgmt_buffer *encoder_buffer, struct mgmt_buffer *decoder_buffer)
 {
     CborError rc;
 
-    rc = cbor_parser_init(decoder_buffer_ctxt->buffer, decoder_buffer_ctxt->size, 0, &ctxt->parser, &ctxt->it);
+    rc = cbor_parser_init(decoder_buffer->buffer, decoder_buffer->size, 0, &ctxt->parser, &ctxt->it);
     if (rc != CborNoError) {
         return mgmt_err_from_cbor(rc);
     }
 
-    cbor_encoder_init(&ctxt->encoder, encoder_buffer_ctxt->buffer, encoder_buffer_ctxt->size, 0);
+    cbor_encoder_init(&ctxt->encoder, encoder_buffer->buffer, encoder_buffer->size, 0);
 
     return 0;
 }

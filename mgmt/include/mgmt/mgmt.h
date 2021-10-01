@@ -231,8 +231,11 @@ struct mgmt_streamer {
     struct cbor_nb_writer writer;
 };
 
-
-struct buffer_ctxt {
+/**
+ * @brief Wrapper structure to pass around a buffer and its size,
+ *        pointing to a decode/encode buffer
+ */
+struct mgmt_buffer {
     void *buffer;
     size_t size;
 };
@@ -407,12 +410,12 @@ int mgmt_write_rsp_status(struct mgmt_ctxt *ctxt, int status);
  * @brief Initializes a management context object with the specified streamer.
  *
  * @param ctxt                  The context object to initialize.
- * @param encoder_buffer_ctxt   The context object holding the buffer for encoding into
- * @param decoder_buffer_ctxt   The context object holding the buffer for decoding from.
+ * @param encoder_buffer        The wrapper object holding the buffer for encoding into.
+ * @param decoder_buffer        The wrapper object holding the buffer for decoding from.
  *
  * @return                      0 on success, MGMT_ERR_[...] code on failure.
  */
-int mgmt_ctxt_init(struct mgmt_ctxt *ctxt, struct buffer_ctxt *encoder_buffer_ctxt, struct buffer_ctxt *decoder_buffer_ctxt);
+int mgmt_ctxt_init(struct mgmt_ctxt *ctxt, struct mgmt_buffer *encoder_buffer, struct mgmt_buffer *decoder_buffer);
 
 /**
  * @brief Converts a CBOR status code to a MGMT_ERR_[...] code.
