@@ -22,10 +22,12 @@
 #include <assert.h>
 #include <string.h>
 
-#include "tinycbor/cbor.h"
+#include "cbor.h"
 #include "mgmt/endian.h"
 #include "mgmt/mgmt.h"
 #include "smp/smp.h"
+
+#include "net/buf.h"
 
 static int
 smp_align4(int x)
@@ -69,15 +71,11 @@ smp_init_rsp_hdr(const struct mgmt_hdr *req_hdr, struct mgmt_hdr *rsp_hdr)
 static int
 smp_read_hdr(struct smp_streamer *streamer, struct mgmt_hdr *dst_hdr)
 {
-    struct cbor_decoder_reader *reader;
-
-    reader = streamer->mgmt_stmr.reader;
-
-    if (reader->message_size < sizeof *dst_hdr) {
+    if (streamer->mgmt_stmr.reader.nb->size < sizeof *dst_hdr) {
         return MGMT_ERR_EINVAL;
     }
 
-    reader->cpy(reader, (char *)dst_hdr, 0, sizeof *dst_hdr);
+    memcpy((char *)dst_hdr, streamer->mgmt_stmr.reader.nb->data, sizeof *dst_hdr);
     return 0;
 }
 
@@ -96,12 +94,25 @@ smp_build_err_rsp(struct smp_streamer *streamer,
                   const struct mgmt_hdr *req_hdr,
                   int status)
 {
-    struct CborEncoder map;
     struct mgmt_ctxt cbuf;
     struct mgmt_hdr rsp_hdr;
+    struct mgmt_buffer encBuf;
+    struct mgmt_buffer decBuf;
     int rc;
 
-    rc = mgmt_ctxt_init(&cbuf, &streamer->mgmt_stmr);
+    /* encoding should happen on the payload_encoder and not on the cbuf.encoder
+     * so create a copy of cbuf and replace the encoder pointer
+     * Nasty but effective hack */
+    struct mgmt_ctxt payload_ctxt;
+
+    /* give the netbuffer memory region to the cbor encoder but with an offset where the header is placed */
+    encBuf.buffer = streamer->mgmt_stmr.writer.nb->data + MGMT_HDR_SIZE;
+    encBuf.size = streamer->mgmt_stmr.writer.nb->size - MGMT_HDR_SIZE;
+
+    decBuf.buffer = streamer->mgmt_stmr.reader.nb->data;
+    decBuf.size = streamer->mgmt_stmr.reader.nb->len;/* use the actual nr of encoded bytes in the buffer, not the max size */
+
+    rc = mgmt_ctxt_init(&cbuf, &encBuf, &decBuf);
     if (rc != 0) {
         return rc;
     }
@@ -112,22 +123,29 @@ smp_build_err_rsp(struct smp_streamer *streamer,
         return rc;
     }
 
-    rc = cbor_encoder_create_map(&cbuf.encoder, &map, CborIndefiniteLength);
+    /* deliberate shallow copies */
+    payload_ctxt.parser = cbuf.parser;
+    payload_ctxt.it = cbuf.it;
+
+    rc = cbor_encoder_create_map(&cbuf.encoder, &payload_ctxt.encoder, CborIndefiniteLength);
     if (rc != 0) {
         return rc;
     }
 
-    rc = mgmt_write_rsp_status(&cbuf, status);
+    rc = mgmt_write_rsp_status(&payload_ctxt, status);
     if (rc != 0) {
         return rc;
     }
 
-    rc = cbor_encoder_close_container(&cbuf.encoder, &map);
+    rc = cbor_encoder_close_container(&cbuf.encoder, &payload_ctxt.encoder);
     if (rc != 0) {
         return rc;
     }
 
-    rsp_hdr.nh_len = cbor_encode_bytes_written(&cbuf.encoder) - MGMT_HDR_SIZE;
+    /* Fix up the response header with the correct length. */
+    rsp_hdr.nh_len = cbor_encoder_get_buffer_size(&cbuf.encoder, encBuf.buffer);
+    /* update the netbuffer length, used in outputting the packet */
+    streamer->mgmt_stmr.writer.nb->len += rsp_hdr.nh_len;
     mgmt_hton_hdr(&rsp_hdr);
     rc = smp_write_hdr(streamer, &rsp_hdr);
     if (rc != 0) {
@@ -157,7 +175,14 @@ smp_handle_single_payload(struct mgmt_ctxt *cbuf,
 {
     const struct mgmt_handler *handler;
     mgmt_handler_fn *handler_fn;
-    struct CborEncoder payload_encoder;
+
+    /* encoding should happen on the payload_encoder and not on the cbuf.encoder
+     * so create a copy of cbuf and replace the encoder pointer
+     * Nasty but effective hack */
+    struct mgmt_ctxt payload_ctxt;
+    /* deliberate shallow copies */
+    payload_ctxt.parser = cbuf->parser;
+    payload_ctxt.it = cbuf->it;
     int rc;
 
     handler = mgmt_find_handler(req_hdr->nh_group, req_hdr->nh_id);
@@ -168,7 +193,7 @@ smp_handle_single_payload(struct mgmt_ctxt *cbuf,
     /* Begin response payload.  Response fields are inserted into the root
      * map as key value pairs.
      */
-    rc = cbor_encoder_create_map(&cbuf->encoder, &payload_encoder,
+    rc = cbor_encoder_create_map(&cbuf->encoder, &payload_ctxt.encoder,
                                  CborIndefiniteLength);
     rc = mgmt_err_from_cbor(rc);
     if (rc != 0) {
@@ -192,7 +217,7 @@ smp_handle_single_payload(struct mgmt_ctxt *cbuf,
         *handler_found = true;
         mgmt_evt(MGMT_EVT_OP_CMD_RECV, req_hdr->nh_group, req_hdr->nh_id, NULL);
 
-        rc = handler_fn(cbuf);
+        rc = handler_fn(&payload_ctxt);
     } else {
         rc = MGMT_ERR_ENOTSUP;
     }
@@ -202,7 +227,7 @@ smp_handle_single_payload(struct mgmt_ctxt *cbuf,
     }
 
     /* End response payload. */
-    rc = cbor_encoder_close_container(&cbuf->encoder, &payload_encoder);
+    rc = cbor_encoder_close_container(&cbuf->encoder, &payload_ctxt.encoder);
     return mgmt_err_from_cbor(rc);
 }
 
@@ -225,9 +250,18 @@ smp_handle_single_req(struct smp_streamer *streamer,
 {
     struct mgmt_ctxt cbuf;
     struct mgmt_hdr rsp_hdr;
+    struct mgmt_buffer encBuf;
+    struct mgmt_buffer decBuf;
     int rc;
 
-    rc = mgmt_ctxt_init(&cbuf, &streamer->mgmt_stmr);
+    /* give the netbuffer memory region to the cbor encoder but with an offset where the header is placed */
+    encBuf.buffer = streamer->mgmt_stmr.writer.nb->data + MGMT_HDR_SIZE;
+    encBuf.size = streamer->mgmt_stmr.writer.nb->size - MGMT_HDR_SIZE;
+
+    decBuf.buffer = streamer->mgmt_stmr.reader.nb->data;
+    decBuf.size = streamer->mgmt_stmr.reader.nb->len;/* use the actual nr of encoded bytes in the buffer, not the max size */
+
+    rc = mgmt_ctxt_init(&cbuf, &encBuf, &decBuf);
     if (rc != 0) {
         return rc;
     }
@@ -248,7 +282,9 @@ smp_handle_single_req(struct smp_streamer *streamer,
     }
 
     /* Fix up the response header with the correct length. */
-    rsp_hdr.nh_len = cbor_encode_bytes_written(&cbuf.encoder) - MGMT_HDR_SIZE;
+    rsp_hdr.nh_len = cbor_encoder_get_buffer_size(&cbuf.encoder, encBuf.buffer);
+    /* update the netbuffer length, used in outputting the packet */
+    streamer->mgmt_stmr.writer.nb->len += rsp_hdr.nh_len;
     mgmt_hton_hdr(&rsp_hdr);
     rc = smp_write_hdr(streamer, &rsp_hdr);
     if (rc != 0) {

@@ -21,7 +21,9 @@
 #define H_MGMT_MGMT_
 
 #include <inttypes.h>
-#include "tinycbor/cbor.h"
+#include "cbor.h"
+
+#include "mgmt/mcumgr/buf.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -171,7 +173,7 @@ typedef void mgmt_reset_buf_fn(void *buf, void *arg);
  *
  * @return                      0 on success, MGMT_ERR_[...] code on failure.
  */
-typedef int mgmt_write_at_fn(struct cbor_encoder_writer *writer, size_t offset,
+typedef int mgmt_write_at_fn(struct cbor_nb_writer *writer, size_t offset,
                              const void *data, size_t len, void *arg);
 
 /** @typedef mgmt_init_reader_fn
@@ -183,7 +185,7 @@ typedef int mgmt_write_at_fn(struct cbor_encoder_writer *writer, size_t offset,
  *
  * @return                      0 on success, MGMT_ERR_[...] code on failure.
  */
-typedef int mgmt_init_reader_fn(struct cbor_decoder_reader *reader, void *buf,
+typedef int mgmt_init_reader_fn(struct cbor_nb_reader *reader, void *buf,
                                 void *arg);
 
 /** @typedef mgmt_init_writer_fn
@@ -195,7 +197,7 @@ typedef int mgmt_init_reader_fn(struct cbor_decoder_reader *reader, void *buf,
  *
  * @return                      0 on success, MGMT_ERR_[...] code on failure.
  */
-typedef int mgmt_init_writer_fn(struct cbor_encoder_writer *writer, void *buf,
+typedef int mgmt_init_writer_fn(struct cbor_nb_writer *writer, void *buf,
                                 void *arg);
 
 /** @typedef mgmt_init_writer_fn
@@ -225,18 +227,26 @@ struct mgmt_streamer_cfg {
 struct mgmt_streamer {
     const struct mgmt_streamer_cfg *cfg;
     void *cb_arg;
-    struct cbor_decoder_reader *reader;
-    struct cbor_encoder_writer *writer;
+    struct cbor_nb_reader reader;
+    struct cbor_nb_writer writer;
 };
 
+/**
+ * @brief Wrapper structure to pass around a buffer and its size,
+ *        pointing to a decode/encode buffer
+ */
+struct mgmt_buffer {
+    void *buffer;
+    size_t size;
+};
 /**
  * @brief Context required by command handlers for parsing requests and writing
  *        responses.
  */
 struct mgmt_ctxt {
-    struct CborEncoder encoder;
-    struct CborParser parser;
-    struct CborValue it;
+    CborEncoder encoder;
+    CborParser parser;
+    CborValue it;
 };
 
 /** @typedef mgmt_handler_fn
@@ -400,12 +410,12 @@ int mgmt_write_rsp_status(struct mgmt_ctxt *ctxt, int status);
  * @brief Initializes a management context object with the specified streamer.
  *
  * @param ctxt                  The context object to initialize.
- * @param streamer              The streamer that will be used with the
- *                                  context.
+ * @param encoder_buffer        The wrapper object holding the buffer for encoding into.
+ * @param decoder_buffer        The wrapper object holding the buffer for decoding from.
  *
  * @return                      0 on success, MGMT_ERR_[...] code on failure.
  */
-int mgmt_ctxt_init(struct mgmt_ctxt *ctxt, struct mgmt_streamer *streamer);
+int mgmt_ctxt_init(struct mgmt_ctxt *ctxt, struct mgmt_buffer *encoder_buffer, struct mgmt_buffer *decoder_buffer);
 
 /**
  * @brief Converts a CBOR status code to a MGMT_ERR_[...] code.

@@ -19,7 +19,7 @@
 
 #include <string.h>
 
-#include "tinycbor/cbor.h"
+#include "cbor.h"
 #include "mgmt/endian.h"
 #include "mgmt/mgmt.h"
 
@@ -49,20 +49,20 @@ int
 mgmt_streamer_write_at(struct mgmt_streamer *streamer, size_t offset,
                        const void *data, int len)
 {
-    return streamer->cfg->write_at(streamer->writer, offset, data, len,
+    return streamer->cfg->write_at(&streamer->writer, offset, data, len,
                                    streamer->cb_arg);
 }
 
 int
 mgmt_streamer_init_reader(struct mgmt_streamer *streamer, void *buf)
 {
-    return streamer->cfg->init_reader(streamer->reader, buf, streamer->cb_arg);
+    return streamer->cfg->init_reader(&streamer->reader, buf, streamer->cb_arg);
 }
 
 int
 mgmt_streamer_init_writer(struct mgmt_streamer *streamer, void *buf)
 {
-    return streamer->cfg->init_writer(streamer->writer, buf, streamer->cb_arg);
+    return streamer->cfg->init_writer(&streamer->writer, buf, streamer->cb_arg);
 }
 
 void
@@ -182,16 +182,16 @@ mgmt_err_from_cbor(int cbor_status)
 }
 
 int
-mgmt_ctxt_init(struct mgmt_ctxt *ctxt, struct mgmt_streamer *streamer)
+mgmt_ctxt_init(struct mgmt_ctxt *ctxt, struct mgmt_buffer *encoder_buffer, struct mgmt_buffer *decoder_buffer)
 {
-    int rc;
+    CborError rc;
 
-    rc = cbor_parser_init(streamer->reader, 0, &ctxt->parser, &ctxt->it);
+    rc = cbor_parser_init(decoder_buffer->buffer, decoder_buffer->size, 0, &ctxt->parser, &ctxt->it);
     if (rc != CborNoError) {
         return mgmt_err_from_cbor(rc);
     }
 
-    cbor_encoder_init(&ctxt->encoder, streamer->writer, 0);
+    cbor_encoder_init(&ctxt->encoder, encoder_buffer->buffer, encoder_buffer->size, 0);
 
     return 0;
 }

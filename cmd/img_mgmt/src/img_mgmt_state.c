@@ -19,7 +19,7 @@
 
 #include <assert.h>
 
-#include "tinycbor/cbor.h"
+#include "cbor.h"
 #include "cborattr/cborattr.h"
 #include "mgmt/mgmt.h"
 #include "img_mgmt/img_mgmt.h"
@@ -204,7 +204,7 @@ img_mgmt_state_read(struct mgmt_ctxt *ctxt)
     err |= cbor_encoder_create_array(&ctxt->encoder, &images,
                                        CborIndefiniteLength);
 
-    for (i = 0; i < 2 * IMG_MGMT_UPDATABLE_IMAGE_NUMBER; i++) {
+    for (i = 0; i < 2; i++) {
         rc = img_mgmt_read_info(i, &ver, hash, &flags);
         if (rc != 0) {
             continue;
@@ -215,10 +215,6 @@ img_mgmt_state_read(struct mgmt_ctxt *ctxt)
         err |= cbor_encoder_create_map(&images, &image,
                                          CborIndefiniteLength);
 
-#if IMG_MGMT_UPDATABLE_IMAGE_NUMBER > 1
-        err |= cbor_encode_text_stringz(&image, "image");
-        err |= cbor_encode_int(&image, i >> 1);
-#endif
         err |= cbor_encode_text_stringz(&image, "slot");
         err |= cbor_encode_int(&image, i % 2);
 

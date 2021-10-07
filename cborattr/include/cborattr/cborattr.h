@@ -26,7 +26,7 @@
 #include <ctype.h>
 #include <stdio.h>
 #include <sys/types.h>
-#include "tinycbor/cbor.h"
+#include "cbor.h"
 
 #ifdef MYNEWT
 #include <os/os_mbuf.h>

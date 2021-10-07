@@ -20,7 +20,7 @@
 #include <assert.h>
 #include <string.h>
 
-#include "tinycbor/cbor.h"
+#include "cbor.h"
 #include "cborattr/cborattr.h"
 #include "mgmt/mgmt.h"
 #include "os_mgmt/os_mgmt.h"
@@ -92,6 +92,7 @@ os_mgmt_echo(struct mgmt_ctxt *ctxt)
         return MGMT_ERR_EINVAL;
     }
 
+    /* encode a mapped key-value pair 'r=...' */
     err |= cbor_encode_text_stringz(&ctxt->encoder, "r");
     err |= cbor_encode_text_string(&ctxt->encoder, echo_buf, strlen(echo_buf));
 
